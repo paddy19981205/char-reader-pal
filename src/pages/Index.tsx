@@ -52,7 +52,7 @@ const Index = () => {
         setStatus("recognizing");
 
         const controller = new AbortController();
-        const timeout = setTimeout(() => controller.abort(), 120000); // 2 minutes
+        const timeout = setTimeout(() => controller.abort(), 300000); // 5 minutes
 
         try {
           const { data, error } = await supabase.functions.invoke("ocr", {
