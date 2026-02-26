@@ -103,6 +103,7 @@ serve(async (req) => {
 
   try {
     const body = await req.json();
+    console.log("Received body keys:", Object.keys(body), "images array?", Array.isArray(body.images), "imageBase64?", !!body.imageBase64);
     
     // Support both single image and array of images
     let images: string[] = [];
