@@ -1,5 +1,5 @@
-import { useState, useCallback, useRef } from "react";
-import { Upload, Copy, Check, Loader2, FileText, RotateCcw, X } from "lucide-react";
+import { useState, useCallback, useRef, WheelEvent } from "react";
+import { Upload, Copy, Check, Loader2, FileText, RotateCcw, ZoomIn, ZoomOut, Maximize2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Card } from "@/components/ui/card";
@@ -33,7 +33,12 @@ const Index = () => {
   const [resultText, setResultText] = useState("");
   const [status, setStatus] = useState<Status>("idle");
   const [copied, setCopied] = useState(false);
+  const [zoom, setZoom] = useState(1);
+  const [panOffset, setPanOffset] = useState({ x: 0, y: 0 });
+  const [isPanning, setIsPanning] = useState(false);
+  const [panStart, setPanStart] = useState({ x: 0, y: 0 });
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const imageContainerRef = useRef<HTMLDivElement>(null);
   const { toast } = useToast();
 
   const handleFiles = useCallback(
@@ -48,7 +53,6 @@ const Index = () => {
         return;
       }
 
-      // Read all files as base64
       const readFile = (file: File): Promise<string> =>
         new Promise((resolve, reject) => {
           const reader = new FileReader();
@@ -109,19 +113,45 @@ const Index = () => {
     setImagePreviews([]);
     setResultText("");
     setStatus("idle");
+    setZoom(1);
+    setPanOffset({ x: 0, y: 0 });
     if (fileInputRef.current) fileInputRef.current.value = "";
   };
 
-  const removeImage = (index: number) => {
-    setImagePreviews((prev) => prev.filter((_, i) => i !== index));
-  };
+  const handleWheel = useCallback((e: WheelEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    setZoom((prev) => {
+      const next = prev - e.deltaY * 0.001;
+      return Math.min(Math.max(next, 0.5), 5);
+    });
+  }, []);
+
+  const handlePointerDown = useCallback((e: React.PointerEvent) => {
+    if (zoom <= 1) return;
+    setIsPanning(true);
+    setPanStart({ x: e.clientX - panOffset.x, y: e.clientY - panOffset.y });
+    (e.target as HTMLElement).setPointerCapture(e.pointerId);
+  }, [zoom, panOffset]);
+
+  const handlePointerMove = useCallback((e: React.PointerEvent) => {
+    if (!isPanning) return;
+    setPanOffset({ x: e.clientX - panStart.x, y: e.clientY - panStart.y });
+  }, [isPanning, panStart]);
+
+  const handlePointerUp = useCallback(() => {
+    setIsPanning(false);
+  }, []);
+
+  const resetZoom = useCallback(() => {
+    setZoom(1);
+    setPanOffset({ x: 0, y: 0 });
+  }, []);
 
   const isProcessing = status === "recognizing" || status === "proofreading" || status === "uploading";
   const hasImages = imagePreviews.length > 0;
 
   return (
     <main className="min-h-screen bg-background">
-      {/* Header */}
       <header className="border-b bg-card">
         <div className="container mx-auto flex items-center justify-between py-4 px-4">
           <div className="flex items-center gap-3">
@@ -140,7 +170,6 @@ const Index = () => {
       </header>
 
       <div className="container mx-auto px-4 py-8">
-        {/* Upload area - shown when no image */}
         {!hasImages && (
           <div className="mx-auto max-w-lg">
             <Card
@@ -151,15 +180,9 @@ const Index = () => {
             >
               <Upload className="h-12 w-12 text-muted-foreground" />
               <div className="text-center">
-                <p className="text-lg font-medium text-foreground">
-                  上傳稿紙圖片
-                </p>
-                <p className="mt-1 text-sm text-muted-foreground">
-                  拖放圖片到此處，或點擊選擇檔案
-                </p>
-                <p className="mt-1 text-xs text-muted-foreground">
-                  支援 JPG、PNG 格式，可選 1～2 張（正面＋背面）
-                </p>
+                <p className="text-lg font-medium text-foreground">上傳稿紙圖片</p>
+                <p className="mt-1 text-sm text-muted-foreground">拖放圖片到此處，或點擊選擇檔案</p>
+                <p className="mt-1 text-xs text-muted-foreground">支援 JPG、PNG 格式，可選 1～2 張（正面＋背面）</p>
               </div>
               <input
                 ref={fileInputRef}
@@ -176,10 +199,8 @@ const Index = () => {
           </div>
         )}
 
-        {/* Result area - shown after upload */}
         {hasImages && (
           <>
-            {/* Progress bar */}
             {isProcessing && (
               <div className="mb-6">
                 <div className="flex items-center gap-3 mb-2">
@@ -211,47 +232,68 @@ const Index = () => {
             )}
 
             <div className="grid gap-6 lg:grid-cols-2">
-              {/* Left: Image preview(s) */}
+              {/* Image preview with zoom/pan */}
               <Card className="overflow-hidden p-2">
-                <p className="mb-2 px-2 text-sm font-medium text-muted-foreground">
-                  原始圖片{imagePreviews.length === 2 ? "（共 2 頁）" : ""}
-                </p>
-                <div className="overflow-auto max-h-[70vh] space-y-4">
-                  {imagePreviews.map((img, idx) => (
-                    <div key={idx} className="relative">
-                      {imagePreviews.length === 2 && (
-                        <Badge className="absolute top-2 left-2 z-10" variant="secondary">
-                          第 {idx + 1} 頁
-                        </Badge>
-                      )}
-                      <img
-                        src={img}
-                        alt={`稿紙圖片 第${idx + 1}頁`}
-                        className="w-full rounded"
-                      />
-                    </div>
-                  ))}
+                <div className="mb-2 px-2 flex items-center justify-between">
+                  <p className="text-sm font-medium text-muted-foreground">
+                    原始圖片{imagePreviews.length === 2 ? "（共 2 頁）" : ""}
+                  </p>
+                  <div className="flex items-center gap-1">
+                    <span className="text-xs text-muted-foreground mr-1">{Math.round(zoom * 100)}%</span>
+                    <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => setZoom((z) => Math.min(z + 0.25, 5))}>
+                      <ZoomIn className="h-4 w-4" />
+                    </Button>
+                    <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => setZoom((z) => Math.max(z - 0.25, 0.5))}>
+                      <ZoomOut className="h-4 w-4" />
+                    </Button>
+                    {zoom !== 1 && (
+                      <Button variant="ghost" size="icon" className="h-7 w-7" onClick={resetZoom}>
+                        <Maximize2 className="h-4 w-4" />
+                      </Button>
+                    )}
+                  </div>
+                </div>
+                <div
+                  ref={imageContainerRef}
+                  className="overflow-hidden max-h-[70vh] select-none"
+                  style={{ cursor: zoom > 1 ? (isPanning ? "grabbing" : "grab") : "default", touchAction: "none" }}
+                  onWheel={handleWheel}
+                  onPointerDown={handlePointerDown}
+                  onPointerMove={handlePointerMove}
+                  onPointerUp={handlePointerUp}
+                >
+                  <div
+                    className="space-y-4 origin-top-left"
+                    style={{
+                      transform: `scale(${zoom}) translate(${panOffset.x / zoom}px, ${panOffset.y / zoom}px)`,
+                    }}
+                  >
+                    {imagePreviews.map((img, idx) => (
+                      <div key={idx} className="relative">
+                        {imagePreviews.length === 2 && (
+                          <Badge className="absolute top-2 left-2 z-10" variant="secondary">
+                            第 {idx + 1} 頁
+                          </Badge>
+                        )}
+                        <img
+                          src={img}
+                          alt={`稿紙圖片 第${idx + 1}頁`}
+                          className="w-full rounded pointer-events-none"
+                          draggable={false}
+                        />
+                      </div>
+                    ))}
+                  </div>
                 </div>
               </Card>
 
-              {/* Right: Text result */}
+              {/* Text result */}
               <Card className="flex flex-col p-4">
                 <div className="mb-2 flex items-center justify-between">
-                  <p className="text-sm font-medium text-muted-foreground">
-                    辨識結果
-                  </p>
+                  <p className="text-sm font-medium text-muted-foreground">辨識結果</p>
                   {resultText && (
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={handleCopy}
-                      className="gap-1"
-                    >
-                      {copied ? (
-                        <Check className="h-4 w-4" />
-                      ) : (
-                        <Copy className="h-4 w-4" />
-                      )}
+                    <Button variant="outline" size="sm" onClick={handleCopy} className="gap-1">
+                      {copied ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
                       {copied ? "已複製" : "複製"}
                     </Button>
                   )}
