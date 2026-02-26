@@ -6,38 +6,7 @@ const corsHeaders = {
     "authorization, x-client-info, apikey, content-type, x-supabase-client-platform, x-supabase-client-platform-version, x-supabase-client-runtime, x-supabase-client-runtime-version",
 };
 
-// Fixed manuscript paper parameters (38 columns)
-const TOTAL_COLS = 38;
-const BLOCK_COLS = [10, 10, 10, 8]; // 4 blocks
-
-// Crop coordinates (percentages of image dimensions)
-const CROP_TOP = 0.08;
-const CROP_BOTTOM = 0.92;
-const CROP_LEFT = 0.05;
-const CROP_RIGHT = 0.95;
-
-serve(async (req) => {
-  if (req.method === "OPTIONS") {
-    return new Response(null, { headers: corsHeaders });
-  }
-
-  try {
-    const { imageBase64 } = await req.json();
-    if (!imageBase64) {
-      return new Response(JSON.stringify({ error: "No image provided" }), {
-        status: 400,
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
-    }
-
-    const LOVABLE_API_KEY = Deno.env.get("LOVABLE_API_KEY");
-    if (!LOVABLE_API_KEY) {
-      throw new Error("LOVABLE_API_KEY is not configured");
-    }
-
-    // We'll send the full image to AI and ask it to recognize the handwritten text
-    // treating it as a 38-column manuscript paper read right-to-left, top-to-bottom per column
-    const ocrPrompt = `你是一個頂尖的繁體中文手寫文字辨識專家。
+const ocrPrompt = `你是一個頂尖的繁體中文手寫文字辨識專家。
 
 【最高原則】你的唯一任務是「看圖辨字」，忠實記錄圖片中每個方格裡的手寫文字。
 - 你是一台掃描機，不是編輯，不是校對，不是作文老師
@@ -106,71 +75,113 @@ serve(async (req) => {
 
 請只輸出辨識出的純文字，不要加任何說明。`;
 
-    console.log("Starting OCR recognition...");
+function buildImageContent(img: string) {
+  return {
+    type: "image_url" as const,
+    image_url: {
+      url: img.startsWith("data:") ? img : `data:image/jpeg;base64,${img}`,
+    },
+  };
+}
 
-    // Step 1: OCR recognition
-    const ocrResponse = await fetch(
-      "https://ai.gateway.lovable.dev/v1/chat/completions",
-      {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${LOVABLE_API_KEY}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          model: "google/gemini-3-flash-preview",
-          temperature: 0,
-          messages: [
-            {
-              role: "user",
-              content: [
-                { type: "text", text: ocrPrompt },
-                {
-                  type: "image_url",
-                  image_url: {
-                    url: imageBase64.startsWith("data:")
-                      ? imageBase64
-                      : `data:image/jpeg;base64,${imageBase64}`,
-                  },
-                },
-              ],
-            },
-          ],
-        }),
-      }
-    );
+async function callAI(apiKey: string, model: string, messages: any[]) {
+  const res = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ model, temperature: 0, messages }),
+  });
+  return res;
+}
 
-    if (!ocrResponse.ok) {
-      if (ocrResponse.status === 429) {
-        return new Response(
-          JSON.stringify({ error: "AI 服務繁忙，請稍後再試。" }),
-          {
-            status: 429,
-            headers: { ...corsHeaders, "Content-Type": "application/json" },
-          }
-        );
-      }
-      if (ocrResponse.status === 402) {
-        return new Response(
-          JSON.stringify({ error: "AI 額度已用完，請加值後再試。" }),
-          {
-            status: 402,
-            headers: { ...corsHeaders, "Content-Type": "application/json" },
-          }
-        );
-      }
-      const errorText = await ocrResponse.text();
-      console.error("OCR error:", ocrResponse.status, errorText);
-      throw new Error(`OCR failed: ${ocrResponse.status}`);
+serve(async (req) => {
+  if (req.method === "OPTIONS") {
+    return new Response(null, { headers: corsHeaders });
+  }
+
+  try {
+    const body = await req.json();
+    
+    // Support both single image and array of images
+    let images: string[] = [];
+    if (body.images && Array.isArray(body.images)) {
+      images = body.images;
+    } else if (body.imageBase64) {
+      images = [body.imageBase64];
+    }
+    
+    if (images.length === 0) {
+      return new Response(JSON.stringify({ error: "No image provided" }), {
+        status: 400,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
     }
 
-    const ocrData = await ocrResponse.json();
-    const rawText =
-      ocrData.choices?.[0]?.message?.content || "";
+    if (images.length > 2) {
+      return new Response(JSON.stringify({ error: "最多只能上傳 2 張圖片" }), {
+        status: 400,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+
+    const LOVABLE_API_KEY = Deno.env.get("LOVABLE_API_KEY");
+    if (!LOVABLE_API_KEY) {
+      throw new Error("LOVABLE_API_KEY is not configured");
+    }
+
+    const model = "google/gemini-3-flash-preview";
+
+    // OCR each image separately, then combine
+    const ocrResults: string[] = [];
+
+    for (let i = 0; i < images.length; i++) {
+      console.log(`Starting OCR for image ${i + 1}/${images.length}...`);
+      
+      const pageLabel = images.length > 1 
+        ? `\n\n這是第 ${i + 1} 頁（共 ${images.length} 頁），請辨識這一頁的所有文字。` 
+        : "";
+
+      const ocrResponse = await callAI(LOVABLE_API_KEY, model, [
+        {
+          role: "user",
+          content: [
+            { type: "text", text: ocrPrompt + pageLabel },
+            buildImageContent(images[i]),
+          ],
+        },
+      ]);
+
+      if (!ocrResponse.ok) {
+        if (ocrResponse.status === 429) {
+          return new Response(
+            JSON.stringify({ error: "AI 服務繁忙，請稍後再試。" }),
+            { status: 429, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+          );
+        }
+        if (ocrResponse.status === 402) {
+          return new Response(
+            JSON.stringify({ error: "AI 額度已用完，請加值後再試。" }),
+            { status: 402, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+          );
+        }
+        const errorText = await ocrResponse.text();
+        console.error(`OCR error for image ${i + 1}:`, ocrResponse.status, errorText);
+        throw new Error(`OCR failed for image ${i + 1}: ${ocrResponse.status}`);
+      }
+
+      const ocrData = await ocrResponse.json();
+      const text = ocrData.choices?.[0]?.message?.content || "";
+      ocrResults.push(text);
+    }
+
+    // Combine results (front + back pages)
+    const rawText = ocrResults.join("\n\n");
 
     console.log("OCR complete, starting proofreading...");
 
-    // Step 2: Proofreading
+    // Proofreading
     const proofreadPrompt = `你是一個繁體中文校對員。以下是 OCR 辨識出的手寫文字。
 
 你的任務非常有限：
@@ -196,57 +207,32 @@ ${rawText}
 
 請直接輸出校對後的文字，不要加任何解釋。`;
 
-    const proofResponse = await fetch(
-      "https://ai.gateway.lovable.dev/v1/chat/completions",
-      {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${LOVABLE_API_KEY}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          model: "google/gemini-3-flash-preview",
-          temperature: 0,
-          messages: [
-            { role: "user", content: proofreadPrompt },
-          ],
-        }),
-      }
-    );
+    const proofResponse = await callAI(LOVABLE_API_KEY, model, [
+      { role: "user", content: proofreadPrompt },
+    ]);
 
     if (!proofResponse.ok) {
-      // If proofreading fails, return raw OCR result
       console.error("Proofreading failed, returning raw text");
       return new Response(
         JSON.stringify({ text: rawText, proofread: false }),
-        {
-          headers: { ...corsHeaders, "Content-Type": "application/json" },
-        }
+        { headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
 
     const proofData = await proofResponse.json();
-    const finalText =
-      proofData.choices?.[0]?.message?.content || rawText;
+    const finalText = proofData.choices?.[0]?.message?.content || rawText;
 
     console.log("Proofreading complete");
 
     return new Response(
       JSON.stringify({ text: finalText, proofread: true }),
-      {
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
-      }
+      { headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );
   } catch (e) {
     console.error("OCR function error:", e);
     return new Response(
-      JSON.stringify({
-        error: e instanceof Error ? e.message : "Unknown error",
-      }),
-      {
-        status: 500,
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
-      }
+      JSON.stringify({ error: e instanceof Error ? e.message : "Unknown error" }),
+      { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );
   }
 });
