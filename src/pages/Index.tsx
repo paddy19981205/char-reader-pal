@@ -1,5 +1,5 @@
 import { useState, useCallback, useRef } from "react";
-import { Upload, Copy, Check, Loader2, FileText, RotateCcw } from "lucide-react";
+import { Upload, Copy, Check, Loader2, FileText, RotateCcw, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Card } from "@/components/ui/card";
@@ -29,65 +29,62 @@ const statusProgress: Record<Status, number> = {
 };
 
 const Index = () => {
-  const [imagePreview, setImagePreview] = useState<string | null>(null);
+  const [imagePreviews, setImagePreviews] = useState<string[]>([]);
   const [resultText, setResultText] = useState("");
   const [status, setStatus] = useState<Status>("idle");
   const [copied, setCopied] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const { toast } = useToast();
 
-  const handleFile = useCallback(
-    async (file: File) => {
-      if (!file.type.startsWith("image/")) {
+  const handleFiles = useCallback(
+    async (files: File[]) => {
+      const imageFiles = files.filter((f) => f.type.startsWith("image/"));
+      if (imageFiles.length === 0) {
         toast({ title: "請上傳圖片檔案（JPG/PNG）", variant: "destructive" });
         return;
       }
+      if (imageFiles.length > 2) {
+        toast({ title: "最多只能上傳 2 張圖片（正面＋背面）", variant: "destructive" });
+        return;
+      }
 
-      // Read file as base64
-      const reader = new FileReader();
-      reader.onload = async (e) => {
-        const base64 = e.target?.result as string;
-        setImagePreview(base64);
+      // Read all files as base64
+      const readFile = (file: File): Promise<string> =>
+        new Promise((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = (e) => resolve(e.target?.result as string);
+          reader.onerror = reject;
+          reader.readAsDataURL(file);
+        });
+
+      try {
+        const base64Images = await Promise.all(imageFiles.map(readFile));
+        setImagePreviews(base64Images);
         setResultText("");
         setStatus("recognizing");
 
-        const controller = new AbortController();
-        const timeout = setTimeout(() => controller.abort(), 300000); // 5 minutes
+        const { data, error } = await supabase.functions.invoke("ocr", {
+          body: { images: base64Images },
+        });
 
-        try {
-          const { data, error } = await supabase.functions.invoke("ocr", {
-            body: { imageBase64: base64 },
-          });
+        if (error) throw new Error(error.message || "辨識失敗");
+        if (data?.error) throw new Error(data.error);
 
-          clearTimeout(timeout);
-
-          if (error) {
-            throw new Error(error.message || "辨識失敗");
-          }
-
-          if (data?.error) {
-            throw new Error(data.error);
-          }
-
-          setResultText(data.text || "");
-          setStatus("done");
-          toast({
-            title: data.proofread ? "辨識與校對完成" : "辨識完成（校對略過）",
-          });
-        } catch (err: any) {
-          clearTimeout(timeout);
-          console.error("OCR error:", err);
-          setStatus("error");
-
-          const isTimeout = err.name === "AbortError" || err.message?.includes("abort");
-          toast({
-            title: isTimeout ? "辨識超時" : "辨識失敗",
-            description: isTimeout ? "處理時間過長，請嘗試較小的圖片或重試" : (err.message || "請重試"),
-            variant: "destructive",
-          });
-        }
-      };
-      reader.readAsDataURL(file);
+        setResultText(data.text || "");
+        setStatus("done");
+        toast({
+          title: data.proofread ? "辨識與校對完成" : "辨識完成（校對略過）",
+        });
+      } catch (err: any) {
+        console.error("OCR error:", err);
+        setStatus("error");
+        const isTimeout = err.name === "AbortError" || err.message?.includes("abort");
+        toast({
+          title: isTimeout ? "辨識超時" : "辨識失敗",
+          description: isTimeout ? "處理時間過長，請嘗試較小的圖片或重試" : (err.message || "請重試"),
+          variant: "destructive",
+        });
+      }
     },
     [toast]
   );
@@ -95,10 +92,10 @@ const Index = () => {
   const handleDrop = useCallback(
     (e: React.DragEvent) => {
       e.preventDefault();
-      const file = e.dataTransfer.files[0];
-      if (file) handleFile(file);
+      const files = Array.from(e.dataTransfer.files);
+      if (files.length > 0) handleFiles(files);
     },
-    [handleFile]
+    [handleFiles]
   );
 
   const handleCopy = async () => {
@@ -109,13 +106,18 @@ const Index = () => {
   };
 
   const handleReset = () => {
-    setImagePreview(null);
+    setImagePreviews([]);
     setResultText("");
     setStatus("idle");
     if (fileInputRef.current) fileInputRef.current.value = "";
   };
 
+  const removeImage = (index: number) => {
+    setImagePreviews((prev) => prev.filter((_, i) => i !== index));
+  };
+
   const isProcessing = status === "recognizing" || status === "proofreading" || status === "uploading";
+  const hasImages = imagePreviews.length > 0;
 
   return (
     <main className="min-h-screen bg-background">
@@ -128,7 +130,7 @@ const Index = () => {
               稿紙 OCR
             </h1>
           </div>
-          {imagePreview && (
+          {hasImages && (
             <Button variant="ghost" size="sm" onClick={handleReset}>
               <RotateCcw className="mr-1 h-4 w-4" />
               重新上傳
@@ -139,7 +141,7 @@ const Index = () => {
 
       <div className="container mx-auto px-4 py-8">
         {/* Upload area - shown when no image */}
-        {!imagePreview && (
+        {!hasImages && (
           <div className="mx-auto max-w-lg">
             <Card
               className="flex flex-col items-center justify-center gap-4 border-2 border-dashed p-12 transition-colors hover:border-primary/50 cursor-pointer"
@@ -156,17 +158,18 @@ const Index = () => {
                   拖放圖片到此處，或點擊選擇檔案
                 </p>
                 <p className="mt-1 text-xs text-muted-foreground">
-                  支援 JPG、PNG 格式
+                  支援 JPG、PNG 格式，可選 1～2 張（正面＋背面）
                 </p>
               </div>
               <input
                 ref={fileInputRef}
                 type="file"
                 accept="image/jpeg,image/png,image/jpg"
+                multiple
                 className="hidden"
                 onChange={(e) => {
-                  const file = e.target.files?.[0];
-                  if (file) handleFile(file);
+                  const files = Array.from(e.target.files || []);
+                  if (files.length > 0) handleFiles(files);
                 }}
               />
             </Card>
@@ -174,7 +177,7 @@ const Index = () => {
         )}
 
         {/* Result area - shown after upload */}
-        {imagePreview && (
+        {hasImages && (
           <>
             {/* Progress bar */}
             {isProcessing && (
@@ -183,6 +186,7 @@ const Index = () => {
                   <Loader2 className="h-4 w-4 animate-spin text-primary" />
                   <span className="text-sm font-medium text-foreground">
                     {statusLabel[status]}
+                    {imagePreviews.length === 2 && "（共 2 頁）"}
                   </span>
                 </div>
                 <Progress value={statusProgress[status]} className="h-2" />
@@ -192,7 +196,7 @@ const Index = () => {
             {status === "done" && (
               <div className="mb-6 flex items-center gap-2">
                 <Badge variant="default">
-                  ✓ 辨識完成
+                  ✓ 辨識完成{imagePreviews.length === 2 ? "（雙面）" : ""}
                 </Badge>
               </div>
             )}
@@ -207,17 +211,26 @@ const Index = () => {
             )}
 
             <div className="grid gap-6 lg:grid-cols-2">
-              {/* Left: Image preview */}
+              {/* Left: Image preview(s) */}
               <Card className="overflow-hidden p-2">
                 <p className="mb-2 px-2 text-sm font-medium text-muted-foreground">
-                  原始圖片
+                  原始圖片{imagePreviews.length === 2 ? "（共 2 頁）" : ""}
                 </p>
-                <div className="overflow-auto max-h-[70vh]">
-                  <img
-                    src={imagePreview}
-                    alt="稿紙圖片"
-                    className="w-full rounded"
-                  />
+                <div className="overflow-auto max-h-[70vh] space-y-4">
+                  {imagePreviews.map((img, idx) => (
+                    <div key={idx} className="relative">
+                      {imagePreviews.length === 2 && (
+                        <Badge className="absolute top-2 left-2 z-10" variant="secondary">
+                          第 {idx + 1} 頁
+                        </Badge>
+                      )}
+                      <img
+                        src={img}
+                        alt={`稿紙圖片 第${idx + 1}頁`}
+                        className="w-full rounded"
+                      />
+                    </div>
+                  ))}
                 </div>
               </Card>
 
