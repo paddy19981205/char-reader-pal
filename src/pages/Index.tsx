@@ -37,33 +37,9 @@ const Index = () => {
   const [panOffset, setPanOffset] = useState({ x: 0, y: 0 });
   const [isPanning, setIsPanning] = useState(false);
   const [panStart, setPanStart] = useState({ x: 0, y: 0 });
-  const [viewMode, setViewMode] = useState<"rich" | "plain">("rich");
   const fileInputRef = useRef<HTMLInputElement>(null);
   const imageContainerRef = useRef<HTMLDivElement>(null);
   const { toast } = useToast();
-
-  /** Parse {字|注音} markup into rich elements */
-  const renderRichText = useCallback((text: string) => {
-    const lines = text.split("\n");
-    return lines.map((line, li) => (
-      <div key={li} className={line.trim() === "" ? "h-4" : ""}>
-        {line.split(/(\{[^|]+\|[^}]+\})/).map((seg, si) => {
-          const match = seg.match(/^\{([^|]+)\|([^}]+)\}$/);
-          if (match) {
-            return (
-              <ruby key={si} className="mx-[1px]">
-                {match[1]}
-                <rp>(</rp>
-                <rt className="text-[0.55em] font-normal text-primary tracking-wider">{match[2]}</rt>
-                <rp>)</rp>
-              </ruby>
-            );
-          }
-          return <span key={si}>{seg}</span>;
-        })}
-      </div>
-    ));
-  }, []);
 
   const handleFiles = useCallback(
     async (files: File[]) => {
@@ -315,44 +291,20 @@ const Index = () => {
               <Card className="flex flex-col p-4">
                 <div className="mb-2 flex items-center justify-between">
                   <p className="text-sm font-medium text-muted-foreground">辨識結果</p>
-                  <div className="flex items-center gap-2">
-                    {resultText && (
-                      <>
-                        <Button
-                          variant={viewMode === "rich" ? "default" : "outline"}
-                          size="sm"
-                          onClick={() => setViewMode("rich")}
-                        >
-                          注音顯示
-                        </Button>
-                        <Button
-                          variant={viewMode === "plain" ? "default" : "outline"}
-                          size="sm"
-                          onClick={() => setViewMode("plain")}
-                        >
-                          純文字
-                        </Button>
-                        <Button variant="outline" size="sm" onClick={handleCopy} className="gap-1">
-                          {copied ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
-                          {copied ? "已複製" : "複製"}
-                        </Button>
-                      </>
-                    )}
-                  </div>
+                  {resultText && (
+                    <Button variant="outline" size="sm" onClick={handleCopy} className="gap-1">
+                      {copied ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
+                      {copied ? "已複製" : "複製"}
+                    </Button>
+                  )}
                 </div>
-                {viewMode === "rich" && resultText ? (
-                  <div className="flex-1 min-h-[50vh] overflow-auto rounded-md border bg-background p-4 font-mono text-base leading-[2.5]">
-                    {renderRichText(resultText)}
-                  </div>
-                ) : (
-                  <Textarea
-                    value={resultText}
-                    onChange={(e) => setResultText(e.target.value)}
-                    placeholder={isProcessing ? "辨識中，請稍候…" : "辨識結果將顯示在此處"}
-                    className="flex-1 min-h-[50vh] resize-none font-mono text-base leading-relaxed"
-                    disabled={isProcessing}
-                  />
-                )}
+                <Textarea
+                  value={resultText}
+                  onChange={(e) => setResultText(e.target.value)}
+                  placeholder={isProcessing ? "辨識中，請稍候…" : "辨識結果將顯示在此處"}
+                  className="flex-1 min-h-[50vh] resize-none font-mono text-base leading-relaxed"
+                  disabled={isProcessing}
+                />
               </Card>
             </div>
           </>
