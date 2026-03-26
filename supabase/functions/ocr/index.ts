@@ -85,7 +85,7 @@ function buildImageContent(img: string) {
 }
 
 async function callAI(apiKey: string, model: string, messages: any[]) {
-  const res = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
+  const res = await fetch("https://generativelanguage.googleapis.com/v1beta/openai/chat/completions", {
     method: "POST",
     headers: {
       Authorization: `Bearer ${apiKey}`,
