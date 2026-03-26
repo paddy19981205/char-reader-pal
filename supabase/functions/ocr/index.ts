@@ -144,7 +144,7 @@ serve(async (req) => {
         ? `\n\n這是第 ${i + 1} 頁（共 ${images.length} 頁），請辨識這一頁的所有文字。` 
         : "";
 
-      const ocrResponse = await callAI(LOVABLE_API_KEY, model, [
+      const ocrResponse = await callAI(GOOGLE_AI_API_KEY, model, [
         {
           role: "user",
           content: [
