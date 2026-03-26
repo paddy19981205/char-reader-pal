@@ -208,7 +208,7 @@ ${rawText}
 
 請直接輸出校對後的文字，不要加任何解釋。`;
 
-    const proofResponse = await callAI(GOOGLE_AI_API_KEY, model, [
+    const proofResponse = await callAI(LOVABLE_API_KEY, model, [
       { role: "user", content: proofreadPrompt },
     ]);
 
