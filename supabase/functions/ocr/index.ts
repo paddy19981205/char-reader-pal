@@ -85,7 +85,7 @@ function buildImageContent(img: string) {
 }
 
 async function callAI(apiKey: string, model: string, messages: any[]) {
-  const res = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
+  const res = await fetch("https://generativelanguage.googleapis.com/v1beta/openai/chat/completions", {
     method: "POST",
     headers: {
       Authorization: `Bearer ${apiKey}`,
@@ -127,12 +127,12 @@ serve(async (req) => {
       });
     }
 
-    const LOVABLE_API_KEY = Deno.env.get("LOVABLE_API_KEY");
-    if (!LOVABLE_API_KEY) {
-      throw new Error("LOVABLE_API_KEY is not configured");
+    const GOOGLE_AI_API_KEY = Deno.env.get("GOOGLE_AI_API_KEY");
+    if (!GOOGLE_AI_API_KEY) {
+      throw new Error("GOOGLE_AI_API_KEY is not configured");
     }
 
-    const model = "google/gemini-3-flash-preview";
+    const model = "gemini-2.5-flash";
 
     // OCR each image separately, then combine
     const ocrResults: string[] = [];
@@ -144,7 +144,7 @@ serve(async (req) => {
         ? `\n\n這是第 ${i + 1} 頁（共 ${images.length} 頁），請辨識這一頁的所有文字。` 
         : "";
 
-      const ocrResponse = await callAI(LOVABLE_API_KEY, model, [
+      const ocrResponse = await callAI(GOOGLE_AI_API_KEY, model, [
         {
           role: "user",
           content: [
@@ -208,7 +208,7 @@ ${rawText}
 
 請直接輸出校對後的文字，不要加任何解釋。`;
 
-    const proofResponse = await callAI(LOVABLE_API_KEY, model, [
+    const proofResponse = await callAI(GOOGLE_AI_API_KEY, model, [
       { role: "user", content: proofreadPrompt },
     ]);
 
