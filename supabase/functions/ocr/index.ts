@@ -84,7 +84,7 @@ function buildImageContent(img: string) {
   };
 }
 
-async function callAI(apiKey: string, model: string, messages: any[]) {
+async function callAI(apiKey: string, model: string, messages: any[], timeoutMs = 120000) {
   const res = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
     method: "POST",
     headers: {
@@ -92,6 +92,7 @@ async function callAI(apiKey: string, model: string, messages: any[]) {
       "Content-Type": "application/json",
     },
     body: JSON.stringify({ model, temperature: 0, messages }),
+    signal: AbortSignal.timeout(timeoutMs),
   });
   return res;
 }
