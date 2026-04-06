@@ -137,6 +137,7 @@ serve(async (req) => {
 
     // OCR each image separately, then combine
     const ocrResults: string[] = [];
+    const startTime = Date.now();
 
     for (let i = 0; i < images.length; i++) {
       console.log(`Starting OCR for image ${i + 1}/${images.length}...`);
@@ -145,15 +146,27 @@ serve(async (req) => {
         ? `\n\n這是第 ${i + 1} 頁（共 ${images.length} 頁），請辨識這一頁的所有文字。` 
         : "";
 
-      const ocrResponse = await callAI(LOVABLE_API_KEY, model, [
-        {
-          role: "user",
-          content: [
-            { type: "text", text: ocrPrompt + pageLabel },
-            buildImageContent(images[i]),
-          ],
-        },
-      ]);
+      let ocrResponse;
+      try {
+        ocrResponse = await callAI(LOVABLE_API_KEY, model, [
+          {
+            role: "user",
+            content: [
+              { type: "text", text: ocrPrompt + pageLabel },
+              buildImageContent(images[i]),
+            ],
+          },
+        ], 120000);
+      } catch (e) {
+        if (e instanceof DOMException && e.name === "TimeoutError") {
+          console.error(`OCR timeout for image ${i + 1}`);
+          return new Response(
+            JSON.stringify({ error: "AI 處理超時，請嘗試較小的圖片或稍後再試。" }),
+            { status: 504, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+          );
+        }
+        throw e;
+      }
 
       if (!ocrResponse.ok) {
         if (ocrResponse.status === 429) {
@@ -180,6 +193,7 @@ serve(async (req) => {
 
     // Combine results (front + back pages)
     const rawText = ocrResults.join("\n\n");
+    const ocrElapsed = Date.now() - startTime;
 
     console.log("OCR complete, starting proofreading...");
 
