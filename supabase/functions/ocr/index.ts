@@ -195,9 +195,20 @@ serve(async (req) => {
     const rawText = ocrResults.join("\n\n");
     const ocrElapsed = Date.now() - startTime;
 
-    console.log("OCR complete, starting proofreading...");
+    // Skip proofreading if OCR already took > 90 seconds (to avoid Edge Function timeout)
+    const PROOFREADING_TIME_LIMIT = 90000;
+    if (ocrElapsed > PROOFREADING_TIME_LIMIT) {
+      console.log(`OCR took ${ocrElapsed}ms (>${PROOFREADING_TIME_LIMIT}ms), skipping proofreading`);
+      return new Response(
+        JSON.stringify({ text: rawText, proofread: false }),
+        { headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
 
-    // Proofreading
+    console.log(`OCR took ${ocrElapsed}ms, starting proofreading...`);
+
+    // Proofreading with remaining time budget
+    const remainingTime = Math.min(120000, 150000 - ocrElapsed - 5000);
     const proofreadPrompt = `你是一個繁體中文校對員。以下是 OCR 辨識出的手寫文字。
 
 你的任務非常有限：
@@ -223,9 +234,18 @@ ${rawText}
 
 請直接輸出校對後的文字，不要加任何解釋。`;
 
-    const proofResponse = await callAI(LOVABLE_API_KEY, model, [
-      { role: "user", content: proofreadPrompt },
-    ]);
+    let proofResponse;
+    try {
+      proofResponse = await callAI(LOVABLE_API_KEY, model, [
+        { role: "user", content: proofreadPrompt },
+      ], remainingTime > 10000 ? remainingTime : 60000);
+    } catch (e) {
+      console.error("Proofreading timeout, returning raw text");
+      return new Response(
+        JSON.stringify({ text: rawText, proofread: false }),
+        { headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
 
     if (!proofResponse.ok) {
       console.error("Proofreading failed, returning raw text");
