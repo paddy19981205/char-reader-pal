@@ -67,25 +67,38 @@ const Index = () => {
         setResultText("");
         setStatus("recognizing");
 
-        const { data, error } = await supabase.functions.invoke("ocr", {
-          body: { images: base64Images },
-        });
+        // 180 second timeout for the entire request
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 180000);
 
-        if (error) throw new Error(error.message || "辨識失敗");
-        if (data?.error) throw new Error(data.error);
+        try {
+          const { data, error } = await supabase.functions.invoke("ocr", {
+            body: { images: base64Images },
+          });
 
-        setResultText(data.text || "");
-        setStatus("done");
-        toast({
-          title: data.proofread ? "辨識與校對完成" : "辨識完成（校對略過）",
-        });
+          clearTimeout(timeoutId);
+
+          if (error) throw new Error(error.message || "辨識失敗");
+          if (data?.error) throw new Error(data.error);
+
+          setResultText(data.text || "");
+          setStatus("done");
+          toast({
+            title: data.proofread ? "辨識與校對完成" : "辨識完成（校對略過）",
+          });
+        } catch (innerErr: any) {
+          clearTimeout(timeoutId);
+          throw innerErr;
+        }
       } catch (err: any) {
         console.error("OCR error:", err);
         setStatus("error");
-        const isTimeout = err.name === "AbortError" || err.message?.includes("abort");
+        const isTimeout = err.name === "AbortError" || err.message?.includes("abort") || err.message?.includes("超時");
         toast({
           title: isTimeout ? "辨識超時" : "辨識失敗",
-          description: isTimeout ? "處理時間過長，請嘗試較小的圖片或重試" : (err.message || "請重試"),
+          description: isTimeout 
+            ? "處理時間過長，請嘗試較小的圖片或稍後再試" 
+            : (err.message || "請重試"),
           variant: "destructive",
         });
       }

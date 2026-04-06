@@ -84,7 +84,7 @@ function buildImageContent(img: string) {
   };
 }
 
-async function callAI(apiKey: string, model: string, messages: any[]) {
+async function callAI(apiKey: string, model: string, messages: any[], timeoutMs = 120000) {
   const res = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
     method: "POST",
     headers: {
@@ -92,6 +92,7 @@ async function callAI(apiKey: string, model: string, messages: any[]) {
       "Content-Type": "application/json",
     },
     body: JSON.stringify({ model, temperature: 0, messages }),
+    signal: AbortSignal.timeout(timeoutMs),
   });
   return res;
 }
@@ -136,6 +137,7 @@ serve(async (req) => {
 
     // OCR each image separately, then combine
     const ocrResults: string[] = [];
+    const startTime = Date.now();
 
     for (let i = 0; i < images.length; i++) {
       console.log(`Starting OCR for image ${i + 1}/${images.length}...`);
@@ -144,15 +146,27 @@ serve(async (req) => {
         ? `\n\n這是第 ${i + 1} 頁（共 ${images.length} 頁），請辨識這一頁的所有文字。` 
         : "";
 
-      const ocrResponse = await callAI(LOVABLE_API_KEY, model, [
-        {
-          role: "user",
-          content: [
-            { type: "text", text: ocrPrompt + pageLabel },
-            buildImageContent(images[i]),
-          ],
-        },
-      ]);
+      let ocrResponse;
+      try {
+        ocrResponse = await callAI(LOVABLE_API_KEY, model, [
+          {
+            role: "user",
+            content: [
+              { type: "text", text: ocrPrompt + pageLabel },
+              buildImageContent(images[i]),
+            ],
+          },
+        ], 120000);
+      } catch (e) {
+        if (e instanceof DOMException && e.name === "TimeoutError") {
+          console.error(`OCR timeout for image ${i + 1}`);
+          return new Response(
+            JSON.stringify({ error: "AI 處理超時，請嘗試較小的圖片或稍後再試。" }),
+            { status: 504, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+          );
+        }
+        throw e;
+      }
 
       if (!ocrResponse.ok) {
         if (ocrResponse.status === 429) {
@@ -179,10 +193,22 @@ serve(async (req) => {
 
     // Combine results (front + back pages)
     const rawText = ocrResults.join("\n\n");
+    const ocrElapsed = Date.now() - startTime;
 
-    console.log("OCR complete, starting proofreading...");
+    // Skip proofreading if OCR already took > 90 seconds (to avoid Edge Function timeout)
+    const PROOFREADING_TIME_LIMIT = 90000;
+    if (ocrElapsed > PROOFREADING_TIME_LIMIT) {
+      console.log(`OCR took ${ocrElapsed}ms (>${PROOFREADING_TIME_LIMIT}ms), skipping proofreading`);
+      return new Response(
+        JSON.stringify({ text: rawText, proofread: false }),
+        { headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
 
-    // Proofreading
+    console.log(`OCR took ${ocrElapsed}ms, starting proofreading...`);
+
+    // Proofreading with remaining time budget
+    const remainingTime = Math.min(120000, 150000 - ocrElapsed - 5000);
     const proofreadPrompt = `你是一個繁體中文校對員。以下是 OCR 辨識出的手寫文字。
 
 你的任務非常有限：
@@ -208,9 +234,18 @@ ${rawText}
 
 請直接輸出校對後的文字，不要加任何解釋。`;
 
-    const proofResponse = await callAI(LOVABLE_API_KEY, model, [
-      { role: "user", content: proofreadPrompt },
-    ]);
+    let proofResponse;
+    try {
+      proofResponse = await callAI(LOVABLE_API_KEY, model, [
+        { role: "user", content: proofreadPrompt },
+      ], remainingTime > 10000 ? remainingTime : 60000);
+    } catch (e) {
+      console.error("Proofreading timeout, returning raw text");
+      return new Response(
+        JSON.stringify({ text: rawText, proofread: false }),
+        { headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
 
     if (!proofResponse.ok) {
       console.error("Proofreading failed, returning raw text");
